@@ -420,16 +420,32 @@ elif menu == "Management Hub":
                 st.metric("Total Interest", format_currency(live_interest))
             
             # Transaction History for this bill
-            bill_history = trans[trans['Bill_ID'] == bill['ID']]
-            if not bill_history.empty:
-                st.markdown("**Transaction History**")
-                st.dataframe(bill_history[['Date', 'Principal for Interest', 'Amount Paid', 'Interest Charged', 'Remaining Balance']], use_container_width=True)
-            
+            bill_trans = cust_trans[cust_trans['Bill_ID'] == bill['ID']].copy()
+            if not bill_trans.empty:
+                st.subheader("Transaction History")
+                disp_table = bill_trans.copy()
+                disp_table['Billing Date'] = bill['Created_Date']
+                disp_table['ROI%'] = f"{bill['Rate']}%"
+                for col in ['Principal for Interest', 'Interest Charged', 'Amount Paid', 'Remaining Balance']:
+                    disp_table[col] = disp_table[col].apply(format_currency)
+                disp_table = disp_table.rename(columns={
+                    'Date': 'Payment Date', 
+                    'Principal for Interest': 'Opening Balance'
+                })
+                final_cols = ['Billing Date', 'Payment Date', 'Opening Balance', 'Amount Paid', 
+                            'Delayed Days', 'ROI%', 'Interest Charged', 'Remaining Balance']
+                st.dataframe(disp_table[final_cols], use_container_width=True, hide_index=True)
+
             # Delete Button
-            if st.button(f"🗑️ Delete Bill #{bill['ID']}", key=f"del_{bill['ID']}"):
-                st.session_state.bills_df = st.session_state.bills_df[st.session_state.bills_df['ID'] != bill['ID']]
-                st.session_state.trans_df = st.session_state.trans_df[st.session_state.trans_df['Bill_ID'] != bill['ID']]
-                st.rerun()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown("**Delete this entire bill?**")
+            with col2:
+                if st.button(f"🗑️ Delete Bill #{bill['ID']}", type="secondary", use_container_width=True, key=f"del_{bill['ID']}"):
+                    st.session_state.bills_df = st.session_state.bills_df[st.session_state.bills_df['ID'] != bill['ID']]
+                    st.session_state.trans_df = st.session_state.trans_df[st.session_state.trans_df['Bill_ID'] != bill['ID']]
+                    st.success(f"✅ Bill #{bill['ID']} deleted!")
+                    st.rerun()
             
             # Payment Form
             if bill['Status'] != 'Fully Paid':
