@@ -246,7 +246,9 @@ def create_customer_consolidated_pdf(customer, stmt_date, bills_df, trans_df, gs
     pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 10, "This is a system-generated consolidated statement.", 0, 0, 'C')
 
-    return bytes(pdf.output(dest='S'))
+    pdf_output = pdf.output(dest='S')
+    return pdf_output if isinstance(pdf_output, bytes) else pdf_output.encode('latin-1', 'replace')
+
 
 # --- FILE UPLOAD & DOWNLOAD FUNCTIONS ---
 def format_currency(value):
@@ -328,7 +330,8 @@ if menu == "Add New Bill":
     
     with st.form("bill_form"):
         cust = st.text_input("Customer Name")
-        bill_id_input = st.text_input("Bill ID (Optional - leave empty for auto-generate)")
+        bill_id_input = st.text_input("Bill ID (Optional - leave empty for auto-generate)", 
+                                    help="Leave empty for auto: 100001, 100002... or enter custom: DL234252324")
         amt = st.number_input("Invoice Amount", min_value=0.0, step=0.01)
         invoice_date = st.date_input("Billing Date", value=date.today())
         due = st.date_input("Due Date", value=date.today())
@@ -338,13 +341,23 @@ if menu == "Add New Bill":
         if submitted:
             if cust and amt > 0:
                 bills = st.session_state.bills_df.copy()
+                
                 if not bill_id_input or str(bill_id_input).strip() == "":
-                    new_id = str(int(bills['ID'].max()) + 1) if not bills.empty else "100001"
+                    # ✅ AUTO-GENERATE: Works with mixed alphanumeric IDs
+                    if not bills.empty:
+                        numeric_ids = []
+                        for id_val in bills['ID']:
+                            if str(id_val).isdigit():
+                                numeric_ids.append(int(id_val))
+                        new_id = str(max(numeric_ids) + 1) if numeric_ids else "100001"
+                    else:
+                        new_id = "100001"
                 else:
                     new_id = str(bill_id_input).strip()
                 
+                # Check duplicate
                 if new_id in bills['ID'].astype(str).values:
-                    st.error("Bill ID already exists!")
+                    st.error("❌ Bill ID already exists!")
                 else:
                     new_bill = pd.DataFrame({
                         'ID': [new_id], 'Customer': [cust], 'Original Amount': [amt],
