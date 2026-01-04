@@ -267,9 +267,14 @@ def load_uploaded_file(uploaded_file):
 
 def save_to_buffer(df, filename):
     output = io.BytesIO()
+    date_cols = ['Due Date', 'Date', 'Created_Date']
     df_save = df.copy()
+    for col in date_cols:
+        if col in df_save.columns:
+            df_save[col] = pd.to_datetime(df_save[col], errors='coerce')
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_save.to_excel(writer, index=False)
+    output.seek(0)
     return output.getvalue()
 
 # --- APP CONFIG ---
@@ -348,6 +353,26 @@ elif menu == "Management Hub":
     bills = st.session_state.bills_df
     trans = st.session_state.trans_df
     
+    # Download updated Excel files
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "⬇️ Download Updated Bills.xlsx", 
+            save_to_buffer(bills, "Bills.xlsx"),
+            "Bills.xlsx", 
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    with col2:
+        st.download_button(
+            "⬇️ Download Updated Transactions.xlsx", 
+            save_to_buffer(trans, "Transactions.xlsx"),
+            "Transactions.xlsx", 
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
     customers = sorted(bills['Customer'].unique())
     selected_customer = st.selectbox("Select Customer", customers)
     cust_bills = bills[bills['Customer'] == selected_customer].copy()
