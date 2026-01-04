@@ -245,9 +245,8 @@ def create_customer_consolidated_pdf(customer, stmt_date, bills_df, trans_df, gs
     pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 10, "This is a system-generated consolidated statement.", 0, 0, 'C')
     
-    # ✅ FIXED PDF OUTPUT
     pdf_output = pdf.output(dest='S')
-    return pdf_output if isinstance(pdf_output, bytes) else bytes(pdf_output)
+    return pdf_output if isinstance(pdf_output, bytes) else pdf_output.encode('latin-1', 'replace')
 
 # --- UTILITY FUNCTIONS ---
 def format_currency(value):
