@@ -4,17 +4,20 @@ import io
 from datetime import date
 from fpdf import FPDF
 
-# 🔥 FIXED: Initialize with proper structure
+# --- INITIALIZE SESSION STATE ---
 if 'bills_df' not in st.session_state:
     st.session_state.bills_df = pd.DataFrame()
 if 'trans_df' not in st.session_state:
-    st.session_state.trans_df = pd.DataFrame(columns=['Trans_ID', 'Bill_ID', 'Date', 'Principal for Interest', 
-                                                     'Delayed Days', 'Interest Charged', 'Amount Paid', 'Remaining Balance'])
+    st.session_state.trans_df = pd.DataFrame()
 if 'files_loaded' not in st.session_state:
     st.session_state.files_loaded = False
-if 'new_bill_created' not in st.session_state:
-    st.session_state.new_bill_created = False
+# Flags to prevent overwriting manual changes with file uploads on rerun
+if 'bills_processed' not in st.session_state:
+    st.session_state.bills_processed = False
+if 'trans_processed' not in st.session_state:
+    st.session_state.trans_processed = False
 
+# --- PDF GENERATION ---
 def create_customer_consolidated_pdf(customer, stmt_date, bills_df, trans_df, gst_rate=0.18):
     def pdf_currency(v):
         return f"Rs. {v:,.2f}"
@@ -244,10 +247,11 @@ def create_customer_consolidated_pdf(customer, stmt_date, bills_df, trans_df, gs
     pdf.ln(8)
     pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 10, "This is a system-generated consolidated statement.", 0, 0, 'C')
+
     pdf_output = pdf.output(dest='S')
     return pdf_output if isinstance(pdf_output, bytes) else pdf_output.encode('latin-1', 'replace')
 
-# Utility functions (unchanged)
+# --- UTILITY FUNCTIONS ---
 def format_currency(value):
     return f"₹{value:,.2f}"
 
@@ -263,50 +267,34 @@ def load_uploaded_file(uploaded_file):
 
 def save_to_buffer(df, filename):
     output = io.BytesIO()
-    date_cols = ['Due Date', 'Date', 'Created_Date']
     df_save = df.copy()
-    for col in date_cols:
-        if col in df_save.columns:
-            df_save[col] = pd.to_datetime(df_save[col], errors='coerce').dt.date
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_save.to_excel(writer, sheet_name=filename.split('.')[0][:31], index=False)
-    output.seek(0)
+        df_save.to_excel(writer, index=False)
     return output.getvalue()
 
 # --- APP CONFIG ---
-st.set_page_config(page_title="FinCalc Pro | Management Hub", page_icon="💰", layout="wide")
+st.set_page_config(page_title="FinCalc Pro", page_icon="💰", layout="wide")
 
-# 🔥 FIXED SIDEBAR - NO MORE DATA LOSS
+# --- SIDEBAR: FILE MANAGEMENT ---
 st.sidebar.title("📁 File Management")
 
-# Upload buttons with CLEAR separation
-if st.sidebar.button("📁 Upload Files", help="Click to upload Bills + Transactions Excel"):
-    bills_upload = st.sidebar.file_uploader("Bills Excel", type=['xlsx', 'xls'], key="bills_upload")
-    trans_upload = st.sidebar.file_uploader("Transactions Excel", type=['xlsx', 'xls'], key="trans_upload")
-    
-    if bills_upload is not None:
-        st.session_state.bills_df = load_uploaded_file(bills_upload)
-        st.session_state.files_loaded = True
-        st.sidebar.success(f"✅ Bills loaded: {len(st.session_state.bills_df)} bills")
-    
-    if trans_upload is not None:
-        st.session_state.trans_df = load_uploaded_file(trans_upload)
-        st.session_state.files_loaded = True
-        st.sidebar.success(f"✅ Transactions loaded: {len(st.session_state.trans_df)} records")
+# Handle Bills Upload
+bills_file = st.sidebar.file_uploader("Upload Bills", type=['xlsx'], key="bills_uploader")
+if bills_file and not st.session_state.bills_processed:
+    st.session_state.bills_df = load_uploaded_file(bills_file)
+    st.session_state.bills_processed = True
+    st.session_state.files_loaded = True
 
-# Status display
-if st.session_state.files_loaded:
-    st.sidebar.info(f"📊 Bills: {len(st.session_state.bills_df)} | Transactions: {len(st.session_state.trans_df)}")
-else:
-    st.sidebar.warning("⚠️ Click 'Upload Files' to start")
+# Handle Trans Upload
+trans_file = st.sidebar.file_uploader("Upload Transactions", type=['xlsx'], key="trans_uploader")
+if trans_file and not st.session_state.trans_processed:
+    st.session_state.trans_df = load_uploaded_file(trans_file)
+    st.session_state.trans_processed = True
 
-# Always show download buttons
-if not st.session_state.bills_df.empty:
-    st.sidebar.download_button("⬇️ Download Bills.xlsx", save_to_buffer(st.session_state.bills_df, "Bills.xlsx"),
-                              "Bills.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-if not st.session_state.trans_df.empty:
-    st.sidebar.download_button("⬇️ Download Transactions.xlsx", save_to_buffer(st.session_state.trans_df, "Transactions.xlsx"),
-                              "Transactions.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+if st.sidebar.button("Reset / Clear All Data"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 st.sidebar.markdown("---")
 menu = st.sidebar.radio("Navigation", ["Add New Bill", "Management Hub"])
@@ -315,147 +303,83 @@ menu = st.sidebar.radio("Navigation", ["Add New Bill", "Management Hub"])
 if menu == "Add New Bill":
     st.title("➕ Create New Invoice")
     
-    if st.session_state.get('new_bill_created', False):
-        st.success("✅ Bill created! Check Management Hub 👈")
-        st.session_state.new_bill_created = False
-    
-    if st.session_state.bills_df.empty:
-        st.warning("⚠️ No bills data. Upload Excel or create first bill!")
-        st.stop()
-    
     with st.form("bill_form"):
         cust = st.text_input("Customer Name")
-        bill_id_input = st.text_input("Bill ID (leave empty for auto-generate)")
-        amt = st.number_input("Invoice Amount", min_value=0.01)
+        bill_id_input = st.text_input("Bill ID (Optional)")
+        amt = st.number_input("Invoice Amount", min_value=0.0, step=100.0)
         invoice_date = st.date_input("Billing Date", value=date.today())
         due = st.date_input("Due Date", value=date.today())
-        rate = st.number_input("Interest Rate (%)", value=12.0, min_value=0.0)
+        rate = st.number_input("Interest Rate (%)", value=12.0)
         
-        submitted = st.form_submit_button("✅ Create Bill")
-        if submitted and cust and amt > 0:
-            bills = st.session_state.bills_df.copy()
-            
-            # Auto-generate ID safely
-            if not bill_id_input or bill_id_input.strip() == "":
-                numeric_ids = pd.to_numeric(bills['ID'], errors='coerce').dropna()
-                new_id = str(int(numeric_ids.max()) + 1) if len(numeric_ids) > 0 else "100001"
+        submitted = st.form_submit_button("Generate Bill")
+        if submitted:
+            if not cust or amt <= 0:
+                st.error("Please provide a customer name and amount.")
             else:
-                new_id = bill_id_input.strip()
-            
-            if new_id in bills['ID'].astype(str):
-                st.error("❌ Bill ID exists!")
-            else:
-                new_bill = pd.DataFrame({
-                    'ID': [new_id], 'Customer': [cust], 'Original Amount': [amt],
-                    'Balance': [amt], 'Due Date': [due], 'Rate': [rate],
-                    'Status': ['Unpaid'], 'Created_Date': [invoice_date]
-                })
-                st.session_state.bills_df = pd.concat([bills, new_bill], ignore_index=True)
+                # ID Generation
+                if not bill_id_input:
+                    numeric_ids = [int(x) for x in st.session_state.bills_df['ID'] if str(x).isdigit()]
+                    new_id = str(max(numeric_ids) + 1) if numeric_ids else "100001"
+                else:
+                    new_id = bill_id_input
+
+                new_row = pd.DataFrame([{
+                    'ID': new_id, 'Customer': cust, 'Original Amount': amt,
+                    'Balance': amt, 'Due Date': due, 'Rate': rate,
+                    'Status': 'Unpaid', 'Created_Date': invoice_date
+                }])
+                
+                st.session_state.bills_df = pd.concat([st.session_state.bills_df, new_row], ignore_index=True)
                 st.session_state.files_loaded = True
-                st.session_state.new_bill_created = True
-                st.success(f"✅ Bill #{new_id} created!")
-                st.rerun()
+                st.success(f"Bill #{new_id} added successfully!")
 
 # --- MANAGEMENT HUB ---
 elif menu == "Management Hub":
-    st.title("📊 Customer Management Hub")
+    st.title("📊 Management Hub")
     
     if st.session_state.bills_df.empty:
-        st.warning("⚠️ No bills found. Upload Excel or create bills!")
-        st.stop()
-    
-    bills = st.session_state.bills_df.copy()
-    trans = st.session_state.trans_df.copy()
-    
-    customers = sorted(bills['Customer'].unique())
-    selected_customer = st.selectbox("Select Customer", customers)
-    cust_bills = bills[bills['Customer'] == selected_customer]
-    
-    if cust_bills.empty:
-        st.warning("No bills for this customer")
-        st.stop()
-    
-    # 🔥 FIXED SUMMARY CALCULATIONS
-    today = date.today()
-    total_original = cust_bills['Original Amount'].sum()
-    total_balance = cust_bills['Balance'].sum()
-    total_interest = 0
-    
-    for _, bill in cust_bills.iterrows():
-        bill_trans = trans[trans['Bill_ID'] == bill['ID']]
-        total_interest += bill_trans['Interest Charged'].sum() if not bill_trans.empty else 0
-    
-    gst = total_interest * 0.18
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Billed", format_currency(total_original))
-    col2.metric("Outstanding", format_currency(total_balance))
-    col3.metric("Interest", format_currency(total_interest))
-    col4.metric("GST", format_currency(gst))
-    
-    # PDF Download
-    stmt_date = st.date_input("Statement Date", value=today)
-    cust_trans = trans[trans['Bill_ID'].isin(cust_bills['ID'])]
-    pdf_data = create_customer_consolidated_pdf(selected_customer, stmt_date, cust_bills, cust_trans)
-    st.download_button("📥 Download PDF", pdf_data,
-                      f"{selected_customer}_Statement_{stmt_date.strftime('%Y%m%d')}.pdf",
-                      "application/pdf", use_container_width=True)
-    
-    # Bills list
-    st.subheader("📋 Bills")
-    for _, bill in cust_bills.iterrows():
-        with st.expander(f"#{bill['ID']} | {bill['Status']} | Balance: {format_currency(bill['Balance'])}"):
-            # Bill info
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Amount", format_currency(bill['Original Amount']))
-            col2.metric("Due Date", bill['Due Date'].strftime('%d %b %Y'))
-            col3.metric("Rate", f"{bill['Rate']}%")
-            
-            # Transactions
-            bill_trans = trans[trans['Bill_ID'] == bill['ID']]
-            if not bill_trans.empty:
-                st.dataframe(bill_trans[['Date', 'Amount Paid', 'Interest Charged', 'Remaining Balance']], 
-                           use_container_width=True)
-            
-            # Delete
-            if st.button(f"🗑️ Delete #{bill['ID']}", key=f"delete_{bill['ID']}"):
-                st.session_state.bills_df = st.session_state.bills_df[st.session_state.bills_df['ID'] != bill['ID']]
-                st.session_state.trans_df = st.session_state.trans_df[st.session_state.trans_df['Bill_ID'] != bill['ID']]
-                st.success(f"Deleted #{bill['ID']}")
-                st.rerun()
-            
-            # Payment form
-            if bill['Status'] != 'Fully Paid':
-                with st.form(key=f"pay_form_{bill['ID']}"):
-                    p_date = st.date_input("Payment Date", value=today, key=f"pdate_{bill['ID']}")
-                    p_amt = st.number_input("Amount Paid", min_value=0.01, key=f"pamt_{bill['ID']}")
-                    submit_pay = st.form_submit_button("✅ Record Payment", use_container_width=True)
-                    
-                    if submit_pay and p_amt > 0:
-                        days_late = max(0, (p_date - bill['Due Date']).days)
-                        interest = (bill['Balance'] * bill['Rate']/100 * days_late) / 365
+        st.warning("No bills available. Please upload or add a bill.")
+    else:
+        # Use session state directly to ensure updates are visible
+        bills = st.session_state.bills_df
+        trans = st.session_state.trans_df
+        
+        customers = sorted(bills['Customer'].unique())
+        selected_customer = st.selectbox("Select Customer", customers)
+        
+        cust_bills = bills[bills['Customer'] == selected_customer]
+        cust_trans = trans[trans['Bill_ID'].isin(cust_bills['ID'])]
+
+        # Summary Metrics
+        total_outstanding = cust_bills['Balance'].sum()
+        st.metric("Total Outstanding", format_currency(total_outstanding))
+
+        # PDF Download
+        stmt_date = st.date_input("Statement Date", value=date.today())
+        pdf_bytes = create_customer_consolidated_pdf(selected_customer, stmt_date, cust_bills, cust_trans)
+        st.download_button("📥 Download Statement (PDF)", pdf_bytes, "statement.pdf", "application/pdf")
+
+        st.markdown("### Bill Details")
+        for _, bill in cust_bills.iterrows():
+            with st.expander(f"Bill #{bill['ID']} - {format_currency(bill['Balance'])}"):
+                st.write(f"Due Date: {bill['Due Date']}")
+                
+                # Payment logic
+                if bill['Status'] != 'Fully Paid':
+                    p_amt = st.number_input("Payment Amount", min_value=0.0, key=f"pay_{bill['ID']}")
+                    if st.button("Record Payment", key=f"btn_{bill['ID']}"):
+                        # Update session state
+                        idx = st.session_state.bills_df.index[st.session_state.bills_df['ID'] == bill['ID']][0]
+                        new_bal = max(0, bill['Balance'] - p_amt)
+                        st.session_state.bills_df.at[idx, 'Balance'] = new_bal
+                        if new_bal == 0:
+                            st.session_state.bills_df.at[idx, 'Status'] = 'Fully Paid'
                         
-                        new_balance = max(0, bill['Balance'] - p_amt)
-                        new_t_id = int(trans['Trans_ID'].max()) + 1 if not trans.empty else 1
-                        
-                        # 🔥 FIXED: Create proper transaction with ALL columns
-                        new_trans = pd.DataFrame([{
-                            'Trans_ID': new_t_id,
-                            'Bill_ID': bill['ID'],
-                            'Date': p_date,
-                            'Principal for Interest': bill['Balance'],
-                            'Delayed Days': days_late,
-                            'Interest Charged': interest,
-                            'Amount Paid': p_amt,
-                            'Remaining Balance': new_balance
+                        # Add transaction
+                        new_t = pd.DataFrame([{
+                            'Trans_ID': len(st.session_state.trans_df)+1, 'Bill_ID': bill['ID'],
+                            'Date': date.today(), 'Amount Paid': p_amt, 'Interest Charged': 0,
+                            'Remaining Balance': new_bal
                         }])
-                        
-                        # Update bill
-                        bills.loc[bills['ID'] == bill['ID'], 'Balance'] = new_balance
-                        if new_balance == 0:
-                            bills.loc[bills['ID'] == bill['ID'], 'Status'] = 'Fully Paid'
-                        
-                        st.session_state.bills_df = bills
-                        st.session_state.trans_df = pd.concat([trans, new_trans], ignore_index=True)
-                        st.success("✅ Payment recorded!")
+                        st.session_state.trans_df = pd.concat([st.session_state.trans_df, new_t], ignore_index=True)
                         st.rerun()
